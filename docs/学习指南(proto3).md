@@ -90,9 +90,9 @@ message SearchRequest {
 }
 ```  
 
-### 预留字段  
+### 保留字段  
 
-如果你通过完全删除或注释一个字段来[更新](##更新消息类型)，那么此后的用户在更新他们自己的类型时将可以重用该字段的序号。如果之后他们使用旧版的`.proto`时，会引起严重的问题，包括数据损坏、隐私bug等。避免给问题的途径之一就是指明你要删除的字段需要（或者会在JSON序列化时会引起问题的名称）是`reserved`的，这样将来用户在使用这些字段时protocol buffer编译器就会告警。  
+如果你通过完全删除或注释一个字段来[更新消息类型](##更新消息类型)，那么此后的用户在更新他们自己的类型时将可以重用该字段的序号。如果之后他们使用旧版的`.proto`时，会引起严重的问题，包括数据损坏、隐私bug等。避免给问题的途径之一就是指明你要删除的字段需要（或者会在JSON序列化时会引起问题的名称）是`reserved`的，这样将来用户在使用这些字段时protocol buffer编译器就会告警。  
 
 ```proto
 message Foo {
@@ -193,11 +193,155 @@ message SearchRequest {
 }
 ```
 
+如你所见，`Corpus`枚举变量的第一个常量映射到0：每一个枚举定义**必须**包含一个映射为0的常量作为第一个元素。因为：  
+
+- 必须有一个0值，这样我们可以使用0作为数字[默认值](##默认值)。
+- 0值必须作为第一个元素，以便于proto2兼容，它的第一枚举变量总是默认值。  
+
+你可以定义别买来给不同的枚举常量分配相同的值。这样就需要你将`allow_alias`设置为`true`，否则编译器在发现别名时会产生错误消息。  
+
+```proto
+enum EnumAllowingAlias {
+  option allow_alias = true;
+  UNKNOWN = 0;
+  STARTED = 1;
+  RUNNING = 1;
+}
+enum EnumNotAllowingAlias {
+  UNKNOWN = 0;
+  STARTED = 1;
+  // RUNNING = 1;  // Uncommenting this line will cause a compile error inside Google and a warning message outside.
+}
+```  
+
+枚举常量取值范围必须在32位正整数之间。因为`enum`变量在传输时使用[varint encoding](https://developers.google.com/protocol-buffers/docs/encoding)，负数是低效且不推荐的。你可以如上述例子一样在消息定义内部定义`enum`，也可以在外部定义，这样的`enum`可以被`.proto`文件中的其它消息定义使用。你也可以使用`MessageType.EnumType`语法将一个消息的`enum`声明类型作为另一个不同消息的字段类型。  
+
+当你编译一个使用了`enum`的`.proto`文件时，生成的代码中会包含Java或C++对应的`enum`，针对Python的特定的`EnumDescriptor`类，用来在执行生成的类中创建一系列包含数值的符号常量。  
+
+在反序列化期间，无法识别的enum值将保留在消息中，尽管在反序列化消息时如何表示该值取决于语言。在支持指定符号范围之外使用值的开放枚举类型的语言，如c++和Go，未知的枚举值只是作为其基础整数表示形式存储。在具有封闭枚举类型的语言，如Java，枚举中的大小写用于表示无法识别的值，并且可以使用特殊的访问器访问底层整数。在任何一种情况下，如果消息被序列化，未被识别的值仍将与消息一起序列化。  
+
+在你所选的语言中，带有`enum`的消息如何工作，详见[generated code guide](https://developers.google.com/protocol-buffers/docs/reference/overview)。  
+
+### 保留变量  
+
+如果你通过完全删除或注释一个字段来[更新](##更新消息类型)枚举类型时，那么之后的用户在更新他们自己的类型时将可以重用该字段的序号。如果之后他们使用旧版的`.proto`时，会引起严重的问题，包括数据损坏、隐私bug等。避免给问题的途径之一就是指明你要删除的字段需要（或者会在JSON序列化时会引起问题的名称）是`reserved`的，这样将来用户在使用这些字段时protocol buffer编译器就会告警。你可以指明你要保留的数字到可能的最大值（通过`max`关键字）得范围。  
+
+```proto
+enum Foo {
+  reserved 2, 15, 9 to 11, 40 to max;
+  reserved "FOO", "BAR";
+}
+```  
+
+注意，不能在同一个`reserved`语句中混用字段名称和字段序号。  
+
 ## 使用其他消息类型  
+
+你也可以使用其它消息类型作为字段类型。例如，假如你想在`SearchResponse`消息中包含一个`Result`消息，你可以在同一个`.proto`文件中定义一个`Result`消息类型，然后在`SearchResponse`中声明一个`Result`类型的字段。  
+
+```proto
+message SearchResponse {
+  repeated Result results = 1;
+}
+
+message Result {
+  string url = 1;
+  string title = 2;
+  repeated string snippets = 3;
+}
+```
+
+### 导入定义  
+
+在上面的例子中，`Result`消息类型和`SearchResponse`定义在同一个`.proto`文件中，如果你要用来的字段类型已经在其它的`.proto`文件中定义了呢？  
+
+你可以通过从其它`.proto`文件中*导入*它们来使用这些定义。要使用其它`.proto`的定义，你需要在你的文件头部导入声明：  
+
+```proto
+import "myproject/other_protos.proto";
+```  
+
+默认情况下，你只能使用直接导入的`.proto`文件。但有时候你可能需要将`.proto`文件移到新的路径。相比于直接移到`.proto`文件然后更新所有用到它的地方，现在你可以在旧的路径下放置一个虚拟的`.proto`文件，以便使用import public概念将所有导入转发到新位置：  
+
+```proto
+// new.proto
+// All definitions are moved here
+```  
+
+```proto
+// old.proto
+// This is the proto that all clients are importing.
+import public "new.proto";
+import "other.proto";
+```  
+
+```proto
+// client.proto
+import "old.proto";
+// You use definitions from old.proto and new.proto, but not other.proto
+```  
+
+编译器在一系列指定的目录（命令行下通过`-I / --proto_path`标志指定）下查找导入的文件。如果没有指定，编译器将在当前目录下查找。通常你应该将`--proto_path`标志设为项目的根目录，并且使用全路径导入。  
+
+### 使用proto2消息类型  
+
+可以在你的proto3消息中导入并使用proto2的消息类型，反之亦可。然而proto2的枚举不能再proto3中直接使用（可以在导入的proto2的消息中使用）。
 
 ## 嵌套类型  
 
+你可以在一个消息类型中定义并使用其它的消息类型，就像下面的例子 -- `Result`消息定义在`SearchResponse`中：  
+
+```proto
+message SearchResponse {
+  message Result {
+    string url = 1;
+    string title = 2;
+    repeated string snippets = 3;
+  }
+  repeated Result results = 1;
+}
+```  
+
+如果你想在父消息类型外重用该消息，可以使用`Parent.Type`:  
+
+```proto
+message SomeOtherMessage {
+  SearchResponse.Result result = 1;
+}
+```  
+
+你可以嵌套任意你想嵌套的深度：  
+
+```proto
+message Outer {                  // Level 0
+  message MiddleAA {  // Level 1
+    message Inner {   // Level 2
+      int64 ival = 1;
+      bool  booly = 2;
+    }
+  }
+  message MiddleBB {  // Level 1
+    message Inner {   // Level 2
+      int32 ival = 1;
+      bool  booly = 2;
+    }
+  }
+}
+```
+
 ## 更新消息类型  
+
+如果已存在的消息类型不再满足你的需求 -- 例如，你想在消息格式中添加新的字段，但还想使用就格式生成的代码。别担心！在不破坏你现有代码的基础上更新消息类型很简单。只需要记住下面的规则：  
+
+- 不要修改已有字段的序号。
+- 如果你新增了字段，任何使用旧格式序列化的消息仍能被新生成的代码解析。你应该记住这些元素的[默认值](##默认值)，以便新代码可以正确地与旧代码生成的消息进行交互。类似地，由新代码创建的消息可以由旧代码解析:旧的二进制文件在解析时简单地忽略新字段。有关详细信息，请参阅[未知字段](https://developers.google.com/protocol-buffers/docs/proto3#unknowns)部分。
+- 字段可以被移除，只要它的序号不再被你更新的消息类型使用。你可以重命名字段，或者添加前缀“OBSOLETE_”，或者[保留](###保留字段)字段号，这样`.proto`的未来用户就不会意外地重用该号码。
+- `int32`、`uint32`、`int64`、`uint64`和`bool`都是兼容的——这意味着你可以将一个字段从这些类型中的一种更改为另一种，而不会中断向前或向后兼容。如果从连线中解析出一个不适合相应类型的数字，那么你将获得与在c++中将该数字强制转换为该类型相同的效果(例如，如果将64位数字读取为int32，那么它将被截断为32位)。
+- `sint32`和`sint64`是相互兼容的，但不与其它整型兼容。
+- `string`和`bytes`兼容，`bytes`与`UTF-8`兼容。
+- 如果字节包含消息的编码版本，则嵌入的消息与`bytes`兼容。
+- `fixed32`与`sfixed32`、`fixed64`和`sfixed64`兼容。
+- 
 
 ## 未知字段  
 
