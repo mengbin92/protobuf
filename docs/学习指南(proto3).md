@@ -341,15 +341,136 @@ message Outer {                  // Level 0
 - `string`和`bytes`兼容，`bytes`与`UTF-8`兼容。
 - 如果字节包含消息的编码版本，则嵌入的消息与`bytes`兼容。
 - `fixed32`与`sfixed32`、`fixed64`和`sfixed64`兼容。
-- 
+- 在传输格式中`enum`与`int32`、`uint32`、`int64`、`uint64`兼容（注意变量不兼容的部分将被截断）。然而需要留意的是在消息反序列化时，客户端代码会被区别对待：例如，尽管无法识别的proto3中的`enum`类型会被保存在消息中，但是在消息反序列化时，它是如何表示这取决于语言。int字段总会保留它的值。
+- 修改**new** `oneof`成员中的单个变量是安全且二进制兼容的。如果您确定没有代码一次设置多个字段，那么将多个字段移动到一个新的字段中可能是安全的。将任何字段移动到现有字段中都是不安全的
 
 ## 未知字段  
 
+未知字段是protocol buffer在序列化数据时无法解析的数据。例如，当旧的二进制代码在解析带有新字段的新二进制代码发送的数据时，这些新字段将成为旧二进制代码中的未知字段。  
+
+最初，在解析时proto3总是丢弃未知字段，但在3.5版本之后，重新引入了未知字段的保留来匹配proto2的行为。在3.5及之后的版本中，在解析时未知字段会被保留并将其包含的序列化的输出中。
+
 ## Any  
+
+`Any`消息类型允许你在没有`.proto`定义的情况下将你的消息类型作为嵌入类型使用。Any包含作为`bytes`的任意序列化消息，以及充当全局惟一标识符并解析为该消息类型的URL。要使用`Any`类型，你需要[导入](##使用其他消息类型)`google/protobuf/any.proto`。  
+
+```proto
+import "google/protobuf/any.proto";
+
+message ErrorStatus {
+  string message = 1;
+  repeated google.protobuf.Any details = 2;
+}
+```  
+
+给定消息类型的默认URL类型为`type.googleapis.com/packagename.messagename`。  
+
+不同的语言实现以类型安全的方式来提供打包和解包`Any`变量的运行时库帮助程序。例如，在Java中，Any类型使用特定的`pack()`和`unpack`访问，而在C++中，使用`PackFrom()`和`UnpackTo()`方法：  
+
+```c++
+// Storing an arbitrary message type in Any.
+NetworkErrorDetails details = ...;
+ErrorStatus status;
+status.add_details()->PackFrom(details);
+
+// Reading an arbitrary message from Any.
+ErrorStatus status = ...;
+for (const Any& detail : status.details()) {
+  if (detail.Is<NetworkErrorDetails>()) {
+    NetworkErrorDetails network_error;
+    detail.UnpackTo(&network_error);
+    ... processing network_error ...
+  }
+}
+```  
+
+**目前，用于处理Any类型的运行时库都在开发中。**  
+
+如果你熟悉[proto2 语法](https://developers.google.com/protocol-buffers/docs/proto)，Any类型取代[扩展](https://developers.google.com/protocol-buffers/docs/proto#extensions)。  
 
 ## Oneof  
 
+如果有有一个包含多个字段的消息，在同一时间最多只能设置一个字段，那么你可以通过使用oneof特性强制执行此行为并节省内存。  
+
+除所有字段共享同一个**Oneof**内存和最多同时只能设置一个字段外，Oneof字段与常规字段类似。设置oneof字段中的任何成员都将自动清除其它成员。根据你所使用的的语言不同，你可以使用（必要时）特定的`case()`或`WhichOneof()`方法来检查Oneof中的哪个变量被设置。  
+
+### 使用 Oneof  
+
+要在你的`.proto`文件中定义一个Oneof字段，你可以在的`oneof`关键字后跟上你的oneof名称，就如下面的`test_oneof`：  
+
+```proto
+message SampleMessage {
+  oneof test_oneof {
+    string name = 4;
+    SubMessage sub_message = 9;
+  }
+}
+```  
+
+之后你可以添加你的oneof字段到oneof定义中。除了不能使用`repeated`字段，你可以使用任意字段。  
+
+在你生成的代码中，oneof字段有着与常规字段一样的`getters`和`setters`。必要时，你也可以使用特定的方法来确定oneof中的哪个值被设置。关于你所选语言的oneof API，详见[API reference](https://developers.google.com/protocol-buffers/docs/reference/overview)。  
+
+### Oneof 特性  
+
+- 设置oneof字段中的任何成员都将自动清除其它成员。如果你设置了多个字段，那么只有最后设置的字段保留变量。  
+
+```c++
+SampleMessage message;
+message.set_name("name");
+CHECK(message.has_name());
+message.mutable_sub_message();   // Will clear name field.
+CHECK(!message.has_name());
+```  
+
+- 如果解析器在网络中遇到同一个Oneof的多个成员，在解析消息时仅使用最后看到的成员。
+- 不能使用`repeated`。
+- oneof字段使用反射 APIs。
+- 如果你设置oneof字段为默认值（比如设施int32字段为0），该字段的“case”将被设置，且在传输时被序列化。
+- 如果你使用C++，请确保你的代码不会引起内存崩溃。下面的代码会引起崩溃，因为在调用`set_name()`方法时`sub_message`已经删除。  
+
+```c++
+SampleMessage message;
+SubMessage* sub_message = message.mutable_sub_message();
+message.set_name("name");      // Will delete sub_message
+sub_message->set_...            // Crashes here
+```  
+
+- 同样是在C++中，如果你使用`Swap()`来交换两个带有oneofs的消息，每个消息会以另一个的oneof case结束：在下面的例子中，`msg1`将拥有`sub_message`，`msg2`将拥有`name`。  
+
+```c++
+SampleMessage msg1;
+msg1.set_name("name");
+SampleMessage msg2;
+msg2.mutable_sub_message();
+msg1.swap(&msg2);
+CHECK(msg1.has_sub_message());
+CHECK(msg2.has_name());
+```  
+
+### 向后兼容问题  
+
+在新增或移除oneof字段时要慎重。如果检测到oneof的返回值为`None/Not_SET`，可能意味着这个oneof尚未设置或已在不同版本的oneof中设置。无法区分这两者之间的不同，因为无法确定传输中的未知字段是否是给oneof的成员。  
+
+#### Tag重用问题  
+
+- **移入/移出字段到oneof**：在消息序列化和解析后，你可能会丢失部分消息（有些字段被清理了）。但是，你可以安全地将单个字段移动到一个新的oneof字段中，如果知道只设置了一个字段，则可以移动多个字段。
+- **删除一个oneof字段后有添加**：在消息序列化和解析后，可能会将你当前的设置清零。
+- **切割/合并 oneof**：与移动常规字段问题相似。  
+
 ## Maps  
+
+如果你想创建一个关联映射作为你的数据定义的一部分，protocol buffers提供了一个方便快捷的语法：  
+
+> map<key_type, value_type> map_field = N;  
+
+这里的`key_type`可以是任意的integral或string类型（即除了浮点型和`bytes`外的所有[标量类型](##标量类型)）。注意`enum`不是有效的`key_type`。`value_type`可以是除了其它Map外的所有类型。  
+
+那么，假如你想创建一个项目映射，每个项目关联一个string键，定义如下：  
+
+> map<string, Project> projects = 3;
+
+- Map字段不可以是`repeated`。
 
 ## 包  
 
