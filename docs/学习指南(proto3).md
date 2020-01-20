@@ -471,8 +471,54 @@ CHECK(msg2.has_name());
 > map<string, Project> projects = 3;
 
 - Map字段不可以是`repeated`。
+- 映射值的网络格式排序和映射迭代排序是未定义的，所以在特定的排序中你不能依赖你的映射元素组成。
+- 为`.proto`生成文本格式时，映射根据键排序。数字键按数字大小排序。
+- 从网络解析/合并时，如果键有多个副本，那么使用最后遇到的键。当从文本格式中解析映射时，如果键存在副本，则可能解析失败。
+- 如果你仅提供了Map字段的键而没有提供值，字段序列化时的行为因语言而异。在C++、Java和Python中，值会被序列化为该类型的默认值，在其它语言中并不会被序列化。
+
+Proto3现已全面支持生成Map API。关于不同语言的Map API，详见[API reference](https://developers.google.com/protocol-buffers/docs/reference/overview)。  
+
+### 向后兼容  
+
+在网络中，Map语法等效如下示例，因此即便proto buffers实现不支持的Maps也能处理你的数据：  
+
+```proto
+message MapFieldEntry {
+  key_type key = 1;
+  value_type value = 2;
+}
+
+repeated MapFieldEntry map_field = N;
+```  
+
+所有的protocol buffers实现都必须能产生和接受上述定义所接受的数据。  
 
 ## 包  
+
+你可以在`.proto`文件中添加`package`说明符来避免协议消息类型键的名称冲突。  
+
+```proto
+package foo.bar;
+message Open { ... }
+```  
+
+之后在定义你的消息类型字段时，你可以使用`package`说明符：  
+
+```proto
+message Foo {
+  ...
+  foo.bar.Open open = 1;
+  ...
+}
+```  
+
+`package`说明符影响生成代码的方式依赖于你所选的语言：  
+
+- 在**C++**中，生成的类会被打包到C++的命名空间中。例如：`Open`位于`foo::bar`命名空间中。
+- 在**Java**中，`package`作为Java包使用，除非在`.proto`文件中额外提供`option java_package`。
+- 在**Python**中，`package`指令会被忽略，Python模块是根据它们在文件系统中的位置来组织的。
+- 在**Go**中，`package`将被用作Go的包名，除非在`.proto`文件中额外提供`option go_package`。
+- 在**Ruby**中，生成的类会被打包嵌入到Ruby的命名空间中，并转换为所需的Ruby大小写样式(第一个字母大写;如果第一个字符不是字母，PB_是前缀)。例如：`Open`位于`foo::bar`命名空间中。
 
 ## 定义服务  
 
