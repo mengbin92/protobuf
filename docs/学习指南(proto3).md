@@ -583,6 +583,32 @@ Proto3的Json实现可支持下列选项：
 
 ## 可选项  
 
+`proto`文件中的各个声明可以用许多选项进行注释。选项不会改变声明的总体含义，但可能影响在特定上下文中处理它的方式。可用选项的完整列表在`google/protobuf/description.proto`中定义。  
+
+有些选项是文件级别的，意味着它们应该写在开头位置，而不是在消息、枚举或服务定义中。有些选项是消息级别的，意味着它们应该写在消息定义中。有些选项是字段选项，意味着它们应该写在字段定义中。选项也可以写在枚举类型、枚举值、服务类型和服务方法中，然而，当前不存在对Any有用的选项。  
+
+下面是一些常用的选项：  
+
+- `java_package`（文件级）：这个包你想用来生成Java类。如果`.proto`文件中没有额外给出`java_package`选项，默认情况下使用proto包（在`.proto`文件中使用*package*关键字指明的）。然而通常情况下proto包并不适合Java包，因为不希望proto包以反向域名展开。如果不生成Java代码，此项无效。  
+
+> option java_package = "com.example.foo";  
+
+- `java_multiple_files`（文件级）：使顶级消息、枚举和服务在包级别定义，而不是在以`.proto`文件命名的外部类中定义。  
+
+> option java_multiple_files = true;  
+
+- `java_outer_classname`（文件级）：希望生成的最外层Java类的类名(以及文件名)。如果在`.proto`文件中没有指定显式的`java_outer_classname`，那么将通过将`.proto`文件名转换为驼峰写法(比如`foo_bar.proto`变为`FooBar.java`)来构造类名。如果不生成Java代码，则此选项无效。
+
+> option java_outer_classname = "Ponycopter";  
+
+- `optimize_for`（文件级）：可被设为`SPEED`、`CODE_SIZE`或`LITE_RUNTIME`。这将通过以下方式影响C++和Java代码生成（也可能影响第三方生成）：  
+  - `SPEED`（默认）：Protocol buffer编译器会为你的消息类型生成序列化、解析和其它常用操作的代码。此代码高度优化。
+  - `CODE_SIZE`：Protocol buffer编译器会生成最小的类，其依赖共享、反射的代码来实现序列化、解析和其它操作。因此生成的代码比`SPEED`小很多，但操作也会比较慢。Classes仍会实现与`SPEED`模式相同的公共API。这种模式在包含大量`.proto`文件且不是所有文件都需要快速生成的应用程序中最有用。
+  - `LITE_RUNTIME`：Protocol buffer编译器依赖“轻量的”运行时库（使用`libprotobuf-lite`而不是`libprotobuf`）。lite运行时比完整的库小得多(大约小一个数量级)，但是忽略了某些特性，比如描述符和反射。这对于在受限平台(如移动电话)上运行的应用程序尤其有用。编译器仍然会像在`SPEED`模式下那样生成所有方法的快速实现。生成的类将仅用每种语言实现`MessageLite`接口，该接口只提供完整`Message`接口方法的一个子集。  
+   >option optimize_for = CODE_SIZE;
+
+- `cc_enable_arenas`（文件级）：为C++代码生成启用[arena allocation](https://developers.google.com/protocol-buffers/docs/reference/arenas)。
+- `objc_class_prefix`（文件级）：
 
 
 ## 编译生成
