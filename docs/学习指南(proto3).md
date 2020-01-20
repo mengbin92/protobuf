@@ -519,11 +519,70 @@ message Foo {
 - 在**Python**中，`package`指令会被忽略，Python模块是根据它们在文件系统中的位置来组织的。
 - 在**Go**中，`package`将被用作Go的包名，除非在`.proto`文件中额外提供`option go_package`。
 - 在**Ruby**中，生成的类会被打包嵌入到Ruby的命名空间中，并转换为所需的Ruby大小写样式(第一个字母大写;如果第一个字符不是字母，PB_是前缀)。例如：`Open`位于`foo::bar`命名空间中。
+- 在**C#** 中，`package`在被转换为`PascalCase`后作为命名空间使用，除非在`.proto`文件中额外提供`option csharp_namespace`。  
+
+### 包和名称解析  
+
+Protocol buffer语言中的类型名称解析类似于C++：首先在最内层查找，之后是下一层，一次类推，每个包在其父包的“内部”。“.”开头（例如，`.foo.bar.Baz`）意味着从最外层作用域开始查找。  
+
+Protocol buffer编译器通过导入的`.proto`文件来解析所有的类型名称。即使有着不同的作用域规则，各语言生成的代码也知道如何每种类型该如何使用。  
 
 ## 定义服务  
 
+如果你现在RPC（远程调用）系统中使用你的消息类型，你可以在`.proto`文件中定义RPC服务接口，之后protocol buffer编译器会生成所选语言的服务接口代码和存根。比如，你要定义一个RPC服务，它使用你的`SearchRequest`并返回`SearchResponse`，在`.proto`文件中你可以这样定义：  
+
+```proto
+service SearchService {
+  rpc Search (SearchRequest) returns (SearchResponse);
+}
+```  
+
+使用protocol buffer最直接的RPC系统是gRPC：由Google开发的，与语言和平台无关的开源RPC系统。gRPC与protocol buffer协同良好，它允许你使用特殊的protocol buffer插件直接从`.proto`文件中生成相关的RPC代码。  
+
+如果你不想使用gRPC，你也可以在你自己的RPC实现中使用protocol buffer。详见[Proto2 Language Guide](https://developers.google.com/protocol-buffers/docs/proto#services)。  
+
+也有一些正在进行的第三方项目来为protocol buffer开发RPC实现。有关我们所知项目的链接列表，请参阅[third-part add-ons wiki page](https://github.com/protocolbuffers/protobuf/blob/master/docs/third_party.md)。  
+
 ## Json Mapping  
 
+Proto3支持Json编码规范，这使得在不同系统间共享数据变得更加方便。在下面的表中，将逐个类型地描述编码。  
+
+如果一个值在JSON编码中丢失或为`null`，在解析到protocol buffer时它会被解释为合适的[默认值](##默认值)。如果protocol buffer中的字段有默认值，那么在Json编码的数据中将默认省略该字段，以节省空间。在Json编码输出中，实现可以提供带有默认字段的选项。  
+
+|        proto3        |     Json      |              Json示例              |                                                                                                                                   备注                                                                                                                                    |
+| :------------------: | :-----------: | :--------------------------------: | :-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
+|       message        |    object     |      {"fooBar":v,"g":null,_}       | 生成Json对象。消息字段名称被映射为lowerCamelCase并成为Json对象的键。如果指定了**json_name**字段选项，则指定的值将被作为键使用。解析器既接受lowerCamelCase名称（或使用json_name指定的名称），也接受原生的proto字段名称。所有字段类型都可接受null，并被视为该类型的默认值。 |
+|         enum         |    string     |             "FOO_BAR"              |                                                                                                     使用proto中指定的enum值名称。解析器既接受枚举名称，也接受整数值。                                                                                                     |
+|       map<K,V>       |    object     |             {"K":v,_}              |                                                                                                                        所有的键都被转换成string。                                                                                                                         |
+|      repeated V      |     array     |              [v, ...]              |                                                                                                                         **null**被当做空列表[]。                                                                                                                          |
+|         bool         |  true,false   |             true,false             |                                                                                                                                                                                                                                                                           |
+|        string        |    string     |           "Hello World!"           |                                                                                                                                                                                                                                                                           |
+|        bytes         | base64 string |     "YWJjMTIzIT8kKiYoKSctPUB+"     |                                                                              Json值会变成使用添加padding的标准base64编码的string。标准的或url安全的base64编码，带/不带padding也都可以接受。                                                                               |
+| int32,fixed32,uint32 |    number     |              1,-10,0               |                                                                                                            Json值会变成十进制的数字。数字或string都可被接受。                                                                                                             |
+| int64,fixed64,uint64 |    string     |             "1","-10"              |                                                                                                           Json值会变成十进制的string。数字或string都可被接受。                                                                                                            |
+|     float,double     |    number     |    1.1,-10.0,0,"NaN","Infinity"    |                                                                                  Json值会变成数字或"NaN"、"Infinity"、"-Infinity"其中之一。数字或string都可被接受。指数表示法也被接受。                                                                                   |
+|         Any          |    object     |     {"@type":"url","f":v,...}      |                                                       如果Any包含的值有特定的Json映射，它将被转换为如下格式：{"@type": xxx, "value": yyy}。否则，该值会被转换为Json对象，且”@type“字段会被插入以指示实际数据类型。                                                        |
+|      Timestamp       |    string     |     "1972-01-01T10:00:20.021Z"     |                                                                                   使用RFC 3339，其生成的输出总是Z-normalized后的，并使用0、3、6或9位小数。除“Z”以外的偏移量也可以接受。                                                                                   |
+|       Duration       |    string     |        "1.000340012s","1s"         |                                                                     根据所需的精度，生成的输出总是包含0、3、6或9位小数，跟后缀”s“。只要符合纳秒精度和后缀“s”的要求，任何小数(也可以没有)都可以接受。                                                                      |
+|        Struct        |    object     |              { ... }               |                                                                                                                    任意的Json对象。参见**struc.proto**                                                                                                                    |
+|    Wrapper types     | various types | 2,"2","foo",true,"true",null,0,... |                                                                                             包装器使用与包装的原始类型相同的JSON表示，但在数据转换和传输期间允许并保留null。                                                                                              |
+|      FieldMask       |    string     |            "f.fooBar,h"            |                                                                                                                         参见**field_mask.proto**                                                                                                                          |
+|      ListValue       |     array     |           [foo,bar, ...]           |                                                                                                                                                                                                                                                                           |
+|        Value         |     value     |                                    |                                                                                                                               任意的Json值                                                                                                                                |
+|      NullValue       |     null      |                                    |                                                                                                                                 Json null                                                                                                                                 |
+|        Empty         |    object     |                 {}                 |                                                                                                                            任意的空Json对象。                                                                                                                             |
+
+### JSON 选项  
+
+Proto3的Json实现可支持下列选项：  
+
+- **带默认值得空字段**：默认情况下，在proto3 JSON输出中会省略具有默认值的字段。实现可以提供一个选项来覆盖此行为，并使用其默认值输出字段。
+- **忽略未知类型**：默认情况下，Proto3 Json解析器会驳回未知字段，但在解析时可以提供选项来忽略未知字段。
+- **使用proto字段来代替lowerCamelCase名称**：默认情况下，proto3 Json的输出应该将字段名转换为lowerCamelCase并作为Json名称使用。该实现可以通过提供选项来使用proto字段作为Json名称。Proto3 Json解析器被设计为可同时接受转换后的lowerCamelCase名称和proto字段名称。
+- **指明enum值作为整数而不是string**：默认情况下，在Json输出中使用枚举值的名称。通过选项可指定使用数字代替枚举值。  
+
 ## 可选项  
+
+
 
 ## 编译生成
