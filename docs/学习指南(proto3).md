@@ -608,7 +608,34 @@ Proto3的Json实现可支持下列选项：
    >option optimize_for = CODE_SIZE;
 
 - `cc_enable_arenas`（文件级）：为C++代码生成启用[arena allocation](https://developers.google.com/protocol-buffers/docs/reference/arenas)。
-- `objc_class_prefix`（文件级）：
+- `objc_class_prefix`（文件级）：为`.proto`文件生成的所有Objective-C类设置前缀。没有默认值。你应该使用[苹果推荐](https://developer.apple.com/library/ios/documentation/Cocoa/Conceptual/ProgrammingWithObjectiveC/Conventions/Conventions.html#//apple_ref/doc/uid/TP40011210-CH10-SW4)的前缀，即3-5个大写字母。注意苹果保留所有的2个字母的前缀。
+- `deprecated`（文件级）：如果设置为`true`，则表示该字段已被废弃，新代码不应使用该字段。在大多数语言中，该选项并没有实际效果。在Java中，会变成一个`@Deprecated`注释。将来，其它语言的代码生成器可能会在字段访问器上生成弃用注释，这将使得编译器在尝试使用该字段时发出警告。如果该字段将不再使用且你也不希望有新的用户使用它，那么可以考虑使用[保留](###保留字段)语句替换字段声明。  
 
+> int32 old_field = 6 [deprecated=true]
 
-## 编译生成
+### 自定义选项  
+
+Protocol buffer也允许你定义并使用自定义的选项。这是大多数人用不到的**高级功能**。如果你真的想创建自定义选项，详见[Proto2 语言指南](https://developers.google.com/protocol-buffers/docs/proto.html#customoptions)。注意，用[扩展](https://developers.google.com/protocol-buffers/docs/proto.html#extensions)来创建自定义选项，这是proto3中唯一允许使用的自定义选项。  
+
+## 编译生成  
+
+要从`.proto`文件中包括你定义的消息类型的Java、Python、C++、Go、Ruby、Objective-C或C#代码，你需要允许protocol buffer编译器`protoc`。如果你还没安装编译器，可从[这里](https://github.com/protocolbuffers/protobuf)下载并根据README编译安装。对于Go，你还需要安装特定的生成插件：在[这里](https://github.com/golang/protobuf/)你可以找到它。  
+
+Protocol编译器使用如下：  
+
+> protoc --proto_path=IMPORT_PATH --cpp_out=DST_DIR --java_out=DST_DIR --python_out=DST_DIR --go_out=DST_DIR --ruby_out=DST_DIR --objc_out=DST_DIR --csharp_out=DST_DIR path/to/file.proto  
+
+- `IMPORT_PATH`指明解决`import`命令时查找`.proto`文件的路径。缺省使用当前目录。多个导入命令可以通过多次使用`--proto_path`选项指明，它们将按顺序检索。`--proto_path`可简写为`-I=IMPORT_PATH`。
+- 你可以提供一个或多个输出命令：  
+  - `--cpp_out`在`DST_DIR`目录中生成C++代码。详见[C++ 生成代码引用](https://developers.google.com/protocol-buffers/docs/reference/cpp-generated)。
+  - `--java_out`在`DST_DIR`目录中生成Java代码。详见[Java 生成代码引用](https://developers.google.com/protocol-buffers/docs/reference/java-generated)。
+  - `--python_out`在`DST_DIR`目录中生成Python代码。详见[Python 生成代码引用](https://developers.google.com/protocol-buffers/docs/reference/python-generated)。
+  - `--go_out`在`DST_DIR`目录中生成Go代码。详见[Go 生成代码引用](https://developers.google.com/protocol-buffers/docs/reference/go-generated)。
+  - `--ruby_out`在`DST_DIR`目录中生成Ruby代码。详见[Ruby 生成代码引用](https://developers.google.com/protocol-buffers/docs/reference/ruby-generated)。
+  - `--objc_out`在`DST_DIR`目录中生成Object-C代码。详见[Object-C 生成代码引用](https://developers.google.com/protocol-buffers/docs/reference/objective-c-generated)。
+  - `--csharp_out`在`DST_DIR`目录中生成C#代码。详见[C# 生成代码引用](https://developers.google.com/protocol-buffers/docs/reference/csharp-generated)。
+  - `--php_out`在`DST_DIR`目录中生成PHP代码。详见[PHP 生成代码引用](https://developers.google.com/protocol-buffers/docs/reference/php-generated)。  
+  
+  作为额外的便利，如果`DST_DIR`以`.zip`或`.jar`，编译器将生成指定名称的ZIP格式的压缩包。`.jar`输出还将根据Java JAR规范的要求提供一个清单文件。注意如果输出文件已存在，那么它将被重写，编译器并不会生成一个新的副本。  
+
+- 你必须提供一个或者多个`.proto`文件作为输入。多个`.proto`文件可以一次指定。虽然这些文件是相对于当前目录命名的，但是每个文件必须驻留在`IMPORT_PATH`中的一个，以便编译器可以确定它的规范名称。
