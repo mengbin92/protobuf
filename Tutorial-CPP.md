@@ -82,4 +82,276 @@ message Person {
 目标路径下会生成下列文件：  
 
 - `addressbook.pb.h`，声明生成的类的头文件。
-- `addressbook.pb.cc`，包含类的实现。
+- `addressbook.pb.cc`，包含类的实现。  
+
+## Protocol Buffer API  
+
+现在我们来看看部分生成的代码，看看编译器生成了什么类和函数。打开`addressbook.pb.h`，你会发现你在`addressbook.proto`中声明的每个消息类型都有一个对应的类。在`Person`类中，你会看到编译器已经为每个字段生成了访问器。例如，对于`name`、`id`、`email`和`phones`字段，有如下方法：  
+
+```c++
+// name
+void clear_name();
+const std::string& name() const;
+void set_name(const std::string& value);
+void set_name(std::string&& value);
+void set_name(const char* value);
+void set_name(const char* value, size_t size);
+std::string* mutable_name();
+
+// email
+void clear_email();
+const std::string& email() const;
+void set_email(const std::string& value);
+void set_email(std::string&& value);
+void set_email(const char* value);
+void set_email(const char* value, size_t size);
+std::string* mutable_email();  
+
+// id
+void clear_id();
+::PROTOBUF_NAMESPACE_ID::int32 id() const;
+void set_id(::PROTOBUF_NAMESPACE_ID::int32 value);
+
+// phones
+int phones_size() const;
+void clear_phones();
+::tutorial::Person_PhoneNumber* mutable_phones(int index);
+::PROTOBUF_NAMESPACE_ID::RepeatedPtrField< ::tutorial::Person_PhoneNumber >* mutable_phones();
+const ::tutorial::Person_PhoneNumber& phones(int index) const;
+::tutorial::Person_PhoneNumber* add_phones();
+
+```
+
+如你所见，getters方法实际是字段名的小写，setters方法以`set_`开头。每个字段都有一个`clear_`方法来清空重置该字段。尽管数字的`id`字段只有上面描述的基本访问器，但由于`name`和`email`是字符串，所以它们还有一对额外的方法 --- `mutable_`可以让你获取直指字符串的指针，以及额外的setter方法。如果在例子中有一个单一消息字段，那它也会有一个`mutable_`方法，但没有`set_`方法。  
+
+重复字段也有一些特有的方法 --- 如何你查看重复字段`phones`的话，你会看到：  
+
+- `_size`检查重复字段的数量（换句话说，`Person`有多少个电话号码）。
+- 使用索引来获取指定的电话号码。
+- 使用索引更新指定的电话
+- 添加新的号码到消息中，之后再编辑（重复标量字段类型都有个`add_`方法，仅可以通过它来访问新的变量）。  
+
+有关编译器为其它字段定义生成的成员的详情，参见[C++ Generated Code Guide](https://developers.google.com/protocol-buffers/docs/reference/cpp-generated)。  
+
+### 枚举和内嵌类  
+
+生成的代码中包含一个`PhoneType`的枚举来匹配`.proto`中的枚举。你可以通过`Person::PhoneType`来访问该类型，其值可以通过`Person::MOBILE`、`Person::HOME`和`Person::WORK`访问（实现细节有点复杂，但使用枚举时并不需要关心实现细节）。  
+
+编译器也为你调用`Person::PhoneNumber`生成了内嵌类。如果你看了生成的代码，你会发现“真的”有个类叫做`Person_PhoneNumber`，但是`Person`中的typedef定义允许你像内嵌类一样使用它。唯一有区别的情况是，如果你想在另一个文件中forward-declare这个类——在c++中你不能forward-declare嵌套类型，但你可以forward-declare `Person_PhoneNumber`。  
+
+### 标准消息方法  
+
+每个消息类也包含很多你可以用来检查/操作整个消息的其它方法，包括：  
+
+- `bool IsInitialized() const`：检查所有字段是否都已初始化。
+- `string DebugString() const`：返回人类可读的消息描述，debug时非常有用。
+- `void CopyFrom(const Person& from);`：使用给定的消息变量重写消息。
+- `void Clear();`：重置所有元素为空状态。  
+
+这些方法和接下来描述的I/O方法实现了所有c++ protocol buffer类共享的消息接口。详见[complete API documentation for Message](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.message.html#Message)。  
+
+### 解析和序列化  
+
+最后，每个类都提供了使用你所选方式来读写protocol buffer格式的二进制消息。包括：  
+
+- `bool SerializeToString(string* output) const;`：将消息序列化并存储到给定的字符串中。注意，是二进制而不是文本字节；我们只是使用`string`作为便携的容器。
+- `bool ParseFromString(const string& data);`从给定的字符串中解析消息。
+- `bool SerializeToOstream(ostream* output) const;`将消息写入给定的C++`ostream`。
+- `bool ParseFromIstream(istream* input);`从给定的C++`istream`中解析消息。  
+
+这些只是所提供用于解析和序列化选项的一部分，完整列表，详见[complete API documentation for Message](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.message.html#Message)。   
+
+## 写入消息  
+
+现在来试试protocol buffer类。你的通讯录程序首先要做的是可以将信息写入通讯录里。为此，你需要创建并实例化你的protocol buffer类，然后将它们写入输出流。  
+
+下面是一个可以从一个文件中读取通讯录，并根据用户输入向其中添加一个新`Person`，然后再次将新的通讯录写回文件。  
+
+```c++
+#include <iostream>
+#include <fstream>
+#include <string>
+
+#include "addressbook.pb.h"
+
+using namespace std;
+
+//从用户输入解析通讯录
+void PromptFromAddress(tutorial::Person *person)
+{
+    cout << "Enter person ID number: ";
+    int id;
+    cin >> id;
+    person->set_id(id);
+    cin.ignore(256, '\n');
+
+    cout << "Enter email address(blank for none): ";
+    string email;
+    getline(cin, email);
+    if (!email.empty())
+        person->set_email(email);
+
+    while (true)
+    {
+        cout << "Enter a phone number(or leave blank to finish): ";
+        string number;
+        getline(cin, number);
+        if (number.empty())
+            break;
+
+        tutorial::Person::PhoneNumber *phone_number = person->add_phones();
+        phone_number->set_number(number);
+
+        cout << "Is this a mobile, home, or work phone? ";
+        string type;
+        getline(cin, type);
+        if (type == "mobile")
+            phone_number->set_type(tutorial::Person::MOBILE);
+        else if (type == "home")
+            phone_number->set_type(tutorial::Person::HOME);
+        else if (type == "work")
+            phone_number->set_type(tutorial::Person::WORK);
+        else
+        {
+            cout << "Unknow phone type, Use default: home. " << endl;
+            phone_number->set_type(tutorial::Person::HOME);
+        }
+    }
+}
+
+int main(int argc, char const *argv[])
+{
+    if (argc != 2)
+    {
+        cerr << "Usage: " << argv[0] << " ADDRESS_BOOK_FILE" << endl;
+        return -1;
+    }
+
+    tutorial::AddressBook address_book;
+
+    fstream input(argv[1], ios::in | ios::binary);
+    if (!input)
+        cout << argv[1] << ": File not found. Create a new file." << endl;
+    else if (!address_book.ParseFromIstream(&input))
+    {
+        cerr << "Failed to parse address book." << endl;
+        return -2;
+    }
+    else
+    {
+        PromptFromAddress(address_book.add_people());
+        fstream output(argv[1], ios::out | ios::binary);
+        if (!address_book.SerializeToOstream(&output))
+        {
+            cerr << "Failed to write address book." << endl;
+            return -3;
+        }
+    }
+
+    //可选操作，用于清除libprotobuf申请的所有全局对象
+    google::protobuf::ShutdownProtobufLibrary();
+
+    return 0;
+}
+```  
+
+注意，在程序末尾调用了`google::protobuf::ShutdownProtobufLibrary()`。它所做的工作就是清除libprotobuf申请的所有全局对象。对大多数程序而言，这一步不是必须的，因为进程一旦结束，系统会自动回收程序开辟的所有内存。然而，如果你使用的是要求每个遗留对象都必须释放或者你在写一个会被单个进程多次导入导出的库，那么你可能会希望protocol buffer来帮你清理这些。  
+
+## 读取消息  
+
+当然，如果你无法从中读取任何消息的通讯录是没用的。下面的例子是从上面例子中创建的文件中读取并输出其中的所有消息。  
+
+```c++
+#include <iostream>
+#include <fstream>
+#include <string>
+
+#include "addressbook.pb.h"
+
+using namespace std;
+
+void ListPeople(const tutorial::AddressBook &address_book)
+{
+    for (int i = 0; i < address_book.people_size(); i++)
+    {
+        const tutorial::Person &person = address_book.people(i);
+
+        cout << "Person ID: " << person.id() << endl;
+        cout << "\t Name: " << person.name() << endl;
+        if (!person.email().empty())
+            cout << "\t Email: " << person.email() << endl;
+
+        for (int j = 0; j < person.phones_size(); j++)
+        {
+            const tutorial::Person::PhoneNumber &phone_number = person.phones(j);
+
+            switch (phone_number.type())
+            {
+            case tutorial::Person::MOBILE:
+                cout << "\t\t Mobile phone: ";
+                break;
+            case tutorial::Person::HOME:
+                cout << "\t\t Home phone: ";
+                break;
+            case tutorial::Person::WORK:
+                cout << "\t\t Work phone: ";
+                break;
+            default:
+                break;
+            }
+            cout << phone_number.number() << endl;
+        }
+    }
+}
+
+int main(int argc, char const *argv[])
+{
+    if (argc != 2)
+    {
+        cerr << "Usage: " << argv[0] << " ADDRESS_BOOK_FILE" << endl;
+        return -1;
+    }
+
+    tutorial::AddressBook address_book;
+
+    fstream input(argv[1], ios::in | ios::binary);
+    if (!address_book.ParseFromIstream(&input))
+    {
+        cerr << "Failed to parse address book." << endl;
+        return -2;
+    }
+
+    ListPeople(address_book);
+
+    google::protobuf::ShutdownProtobufLibrary();
+
+    return 0;
+}
+```  
+
+## 扩展  
+
+在发布protocol buffer生成的代码后不久，你肯定会想`提升`你的protocol buffer定义。如果你想新的buffer可以被后向兼容，并且旧的buffer可以被前向兼容，--- 你确实想这样做 --- 那你需要遵守下面的规则。在新版的protocol buffer中：  
+
+- 你**必须不能**改变已有字段的序号。
+- 你**可以**删除repeated字段。
+- 你**可以**新增repeated字段，但必须使用新的序号（序号在protocol buffer中没被用过，也没被删除）。  
+
+还有一些[其它的扩展](https://developers.google.com/protocol-buffers/docs/proto3#updating)要遵守，但很少会用到它们。  
+
+如果你遵守这些规则，那么旧代码可以轻松读取新的消息，忽略新的字段。对旧代码而言，删除的重复字段是空的。新代码可以正常读取旧消息。  
+
+## 优化建议  
+
+C++ Protocol Buffer库是高度优化过的。但是，恰当的用法还是可以提高效率的。下面的一些技巧可以让你进一步压榨库的性能：  
+
+- 尽可能重用消息对象。重用时，消息会保留它开辟的所有内存，即使被清理过。这样，如果你正在连续处理许多具有相同类型和相似结构的消息，那么每次最好重用相同的消息对象以减小内存分配的开销。但是，随着时间的推移，对象可能会变得非常庞大，特别是当您的消息在“形状”上发生变化，或者您偶尔构造一个比通常大得多的消息时。您应该通过调用`SpaceUsed`方法来监视消息对象的大小，并在它们变得太大时删除它们。
+- 在多线程调用时，针对大量小对象的创建，系统的内存分配可能优化的不够好。可以使用[Google`s tcmalloc](https://github.com/gperftools/gperftools)替代。  
+
+## 高级用法  
+
+Protocol Buffer的用途不仅限于简单的访问器和序列化。一定要研究[C++ API Reference](https://developers.google.com/protocol-buffers/docs/reference/cpp/index.html)，看看还可以用它们做什么。  
+
+protocol 消息提供的一个最重要的功能是`反射`。你可以迭代消息的字段并操作它们的值，而无需针对任何特定的消息类型编写代码。使用反射的一个非常有用的方法是将协议消息与其他编码(如XML或JSON)进行转换。反射的一个更高级的用途可能是发现相同类型的两个消息之间的差异，或者开发一种“协议消息的正则表达式”，在这种表达式中可以编写与特定消息内容匹配的表达式。如果您发挥您的想象力，可能会将协议缓冲区应用到比您你初预期的范围更广的问题上! 
+
+关于反射，详见[Message::Reflection interface](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.message.html#Message.Reflection)。
