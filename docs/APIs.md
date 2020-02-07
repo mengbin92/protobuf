@@ -16,8 +16,8 @@
 [Any](###Any)  
 [Oneof](###Oneof)  
 [枚举](###枚举)  
-[扩展](###扩展)  
-[Arena调用](###Arena调用)  
+[扩展](###扩展（仅proto2）)  
+[Arena分配](###Arena分配)  
 [服务](###服务)  
 [插件](###插件)  
 
@@ -566,8 +566,142 @@ enum Foo {
 
 你可以在消息类型中定义一个枚举。这种情况下，编译器生成的代码是将它声明为消息类的内嵌枚举类型。`Foo_descriptor()`和`Foo_IsValid()`会被声明为静态函数。实际上，枚举类型本身和它的值使用重组后的名称被声明为全局范围可用，使用typedef和一些常量定义的方式导入类的范围。这样做只是为了避免声明排序的问题。假如枚举真的被内嵌到消息类型中，不要依赖重组后的头部名称。
 
+### 扩展（仅proto2）  
 
-### 扩展  
-### Arena调用  
+给出带有扩展范围的消息类型：  
+
+```proto
+message Foo {
+  extensions 100 to 199;
+}
+```  
+
+编译器会为`Foo`生产一些额外的方法：`HasExtension()`，`ExtensionSize()`，`ClearExtension()`，`GetExtension()`，`SetExtension()`，`MutableExtension()`，`AddExtension()`，`SetAllocatedExtension()`和`ReleaseExtension()`。每个方法的第一个参数是一个扩展标识符（如下所述），它标识一个扩展字段。其余的参数和返回值与对应的访问方法的参数和返回值完全相同，这些访问方法将为与扩展标识符类型相同的普通（非扩展）字段生成。（`GetExtension()`对应于没有特殊前缀的访问器。）  
+
+给出如下的扩展定义：  
+
+```proto
+extend Foo {
+  optional int32 bar = 123;
+  repeated int32 repeated_bar = 124;
+}
+```  
+
+对于单个的扩展字段`bar`，编译器生成一个名为`bar`的“扩展标识符”，你可以使用`Foo`的访问器来访问该扩展，如下：  
+
+```c++
+Foo foo;
+assert(!foo.HasExtension(bar));
+foo.SetExtension(bar, 1);
+assert(foo.HasExtension(bar));
+assert(foo.GetExtension(bar) == 1);
+foo.ClearExtension(bar);
+assert(!foo.HasExtension(bar));
+```  
+
+类似地，对于重复字段`repeated_bar`，编译器生成一个名为`repeated_bar`的“扩展标识符”，你可以使用`Foo`的访问器来访问它：  
+
+```c++
+Foo foo;
+for (int i = 0; i < kSize; ++i) {
+  foo.AddExtension(repeated_bar, i)
+}
+assert(foo.ExtensionSize(repeated_bar) == kSize)
+for (int i = 0; i < kSize; ++i) {
+  assert(foo.GetExtension(repeated_bar, i) == i)
+}
+```  
+
+（扩展标识符的确切实现是复杂的，涉及到模板的神奇使用——但是，您不需要担心扩展标识符是如何使用它们的。）  
+
+扩展可以声明为其它类型的内嵌类型。例如，常见的模式如下：  
+
+```proto
+message Baz {
+  extend Foo {
+    optional Baz foo_ext = 124;
+  }
+}
+```  
+
+这种情况下，扩展标识符`foo_ext`被声明为`Baz`的内嵌类型。使用方法如下：  
+
+```c++
+Foo foo;
+Baz* baz = foo.MutableExtension(Baz::foo_ext);
+FillInMyBaz(baz);
+```  
+
+### Arena分配  
+
+Arena分配是仅C++有的功能，在使用Protocol Buffer时，它可以帮助你优化你的内存使用，提高性能。在`.proto`文件中启用Arena分配会在生成的C++代码中添加处理Arena分配的额外代码。关于Arena分配API的细节，详见[Arena Allocation Guide](https://developers.google.com/protocol-buffers/docs/reference/arenas)。  
+
 ### 服务  
-### 插件
+
+如果`.proto`文件中包含下面的内容：  
+
+> option cc_generic_services = true;
+
+之后，Protocol Buffer编译器会根据在本节中描述的文件中找到的服务定义生成代码。然而，生成的代码可能不受欢迎，因为它并没有绑定特定的RPC系统，因此需要为一个系统定制更多级别的间接代码。如果你不想生成这样的代码，你可以在文件中添加这一行：  
+
+> option cc_generic_services = false;
+
+如果上面的行都未给定，默认选项未`false`，因此不推荐使用通用服务。（注意，2.4.0版本之前，默认选项为`true`。）  
+
+基于`.proto`语言服务定义的RPC系统应该提供[插件](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.compiler.plugin.pb)来生成适合系统的代码。这些插件可能需要禁用抽象服务，以便它们可以生成自己的同名类。插件是2.3.0版本（2010年1月）新引入的。  
+
+下面的章节描述抽象服务启用时编译器会生成什么。  
+
+#### 接口  
+
+给出如下服务定义：  
+
+```proto
+service Foo {
+  rpc Bar(FooRequest) returns(FooResponse);
+}
+```  
+
+编译器会生成一个名为`Foo`的类来表示该服务。`Foo`中包含服务定义中定义的每个方法的虚方法。这种情况下，`Bar`方法定义如下：  
+
+```c++
+virtual void Bar(RpcController* controller, const FooRequest* request,
+                 FooResponse* response, Closure* done);
+```  
+
+这些参数等同于[Service::CallMethod()](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.service.html#Service.CallMethod.details)的参数，只是`method`参数是隐含的，而`request`和`response`指定了它们的确切类型。  
+
+这些生成的方法是虚，但不是纯虚的。默认的实现知识简单地调用`controller->`[SetFailed()](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.service.html#RpcController.SetFailed)，并使用一条错误消息指示方法未实现，然后调用`done`回调。在实现你自己的服务时，你必须子类化这个生成的服务并适当的实现它的方法。  
+
+`Foo`子类化[Service](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.service.html#Service)接口。编译器会自动实现如下的`Service`的方法：  
+
+- `GetDescriptor`：返回服务的[ServiceDescriptor](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.descriptor.html#ServiceDescriptor)。
+- `CallMethod`：根据提供的方法描述符确定要调用哪个方法，并直接调用它，将请求和响应消息对象向下转换为正确的类型。
+- `GetRequestPrototype`和`GetResponsePrototype`：针对给定的方法，返回当前类型的请求/响应的默认实例。  
+
+也会生成下列静态方法：  
+
+- `static `[ServiceDescriptor](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.descriptor.html#ServiceDescriptor) `descriptor()`：返回类型的描述，其中包括该服务包含那些方法以及它们的输入输出类型。
+
+#### Stub  
+
+编译器还为每个服务接口生成了一个“Stub”实现，由要向实现服务的服务器发送请求的客户端使用。对于`Foo`服务，Stub实现被定义未`Foo_Stub`。就像内嵌消息类型一样，由于typedef的使用，所以可以使用`Foo::Stub`来引用`Foo_Stub`。  
+
+`Foo_Stub`是实现了如下方法的`Foo`的子类：  
+
+- `Foo_Stub(`[RpcChannel](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.service.html#RpcChannel)`* channel)`：在给定的通道上发送请求的新构造的Stub。
+- `Foo_Stub(`[RpcChannel](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.service.html#RpcChannel)`* channel, `[ChannelOwnership](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.service.html#Service.ChannelOwnership)` ownership)`：在给定的通道上发送请求的新构造的Stub,及通道的所有者。如果`ownership`是`Service::STUB_OWNS_CHANNEL`，之后在删除stub对象时也会删除该通道。
+- [RpcChannel](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.service.html#RpcChannel)`* channel)`：返回传递给构造函数的stub通道。  
+
+stub还额外实现了作为通道打包器的每个服务方法。调用其中一个方法只是简单地调用`channel->`[CallMethod()](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.service.html#RpcChannel.CallMethod)。  
+
+Protocol Buffer库并不包含RPC实现。但是，它包括将生成的服务类连接到你所选择的任意RPC实现所需的所有工具。你只需要提供[RpcChannel](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.service.html#RpcChannel)和[RpcController](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.service.html#RpcController)的实现。更多信息，详见[service.h](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.service)。  
+
+### 插件  
+
+想要扩展c++代码生成器输出的代码，[Code generator plugin](https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.compiler.plugin.pb)可以使用给定的插入点名称插入下列类型的代码。除非另做说明，否则每个插入点都出现在`.pb.cc`和`.pb.h`文件中。  
+
+- `includes`：include命令。
+- `namespace_scope`：属于文件包/名称空间，但不属于任何特定类的声明。出现在所有其他名称空间范围代码之后。
+- `global_scope`：属于顶级声明，位于文件级明明空间之外。出现在文件末尾。
+- `class_scope:TYPENAME`：属于消息类的成员声明。`TYPENAME`是完整的proto名称，例如`package.MessageType`。在类中，出现在其它公共声明之后。只出现在`.pb.h`文件中。
